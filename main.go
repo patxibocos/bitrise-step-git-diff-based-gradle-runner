@@ -171,10 +171,10 @@ task incremental {
         new File(output).withWriter { writer ->
             subprojects.forEach { currentProject ->
                 def dependants = subprojects.findAll { subproject ->
-                    def implementationDependencies = subproject.configurations.getByName("implementation").dependencies
-                    def apiDependencies = subproject.configurations.getByName("api").dependencies
-                    (implementationDependencies + apiDependencies).any { dependency ->
-                        dependency instanceof DefaultProjectDependency && (dependency as DefaultProjectDependency).dependencyProject == currentProject
+                    subproject.configurations*.dependencies.any { dependencySet ->
+                        dependencySet.any { dependency ->
+                            dependency instanceof DefaultProjectDependency && dependency.dependencyProject == currentProject && dependency.dependencyProject != subproject
+                        }
                     }
                 }.collect { it.name }.join(",")
                 writer << "\"$currentProject.name\",\"$currentProject.projectDir.path\",\"$dependants\"\n"
