@@ -55,19 +55,24 @@ func getAllGradleProjects(baseDir string) ([]gradleProject, error) {
 	defer func() {
 		_ = restoreGradleBuildFile(baseDir, *gradleBuildScriptFile)
 	}()
-	err = createIncrementalGradleFile(baseDir)
+	incrementalGradleFileName := "incremental.gradle"
+	err = createIncrementalGradleFile(baseDir, incrementalGradleFileName)
 	if err != nil {
 		return nil, err
 	}
-	err = applyIncrementalGradle(baseDir, *gradleBuildScriptFile)
+	err = applyIncrementalGradle(baseDir, *gradleBuildScriptFile, incrementalGradleFileName)
 	if err != nil {
 		return nil, err
 	}
-	err = runGradleIncrementalTask(baseDir)
+	csvFileFileName := "incremental.csv"
+	err = runGradleIncrementalTask(baseDir, csvFileFileName)
+	defer func() {
+		_ = os.Remove(path.Join(baseDir, incrementalGradleFileName))
+	}()
 	if err != nil {
 		return nil, err
 	}
-	return readGradleProjectsFromCsv(baseDir)
+	return readGradleProjectsFromCsv(baseDir, csvFileFileName)
 }
 
 func backupGradleBuildFile(baseDir string, buildFileName string) error {
@@ -117,7 +122,7 @@ func findGradleBuildFile(baseDir string) *string {
 	return nil
 }
 
-func applyIncrementalGradle(baseDir string, gradleBuildScriptFile string) error {
+func applyIncrementalGradle(baseDir string, gradleBuildScriptFile string, incrementalGradleFileName string) error {
 	switch gradleBuildScriptFile {
 	case "build.gradle":
 		groovyBuildScript, err := os.OpenFile(path.Join(baseDir, "build.gradle"), os.O_APPEND|os.O_WRONLY, os.ModeAppend)
@@ -129,7 +134,7 @@ func applyIncrementalGradle(baseDir string, gradleBuildScriptFile string) error 
 		if err != nil {
 			return err
 		}
-		_, err = groovyBuildScript.WriteString("\napply from: 'incremental.gradle'")
+		_, err = groovyBuildScript.WriteString("\napply from: '" + incrementalGradleFileName + "'")
 		if err != nil {
 			return nil
 		}
@@ -144,7 +149,7 @@ func applyIncrementalGradle(baseDir string, gradleBuildScriptFile string) error 
 		if err != nil {
 			return err
 		}
-		_, err = kotlinBuildScript.WriteString("\napply(from = \"incremental.gradle\")")
+		_, err = kotlinBuildScript.WriteString("\napply(from = \"" + incrementalGradleFileName + "\")")
 		if err != nil {
 			return nil
 		}
@@ -154,8 +159,8 @@ func applyIncrementalGradle(baseDir string, gradleBuildScriptFile string) error 
 	}
 }
 
-func createIncrementalGradleFile(baseDir string) error {
-	incrementalFile, err := os.Create(path.Join(baseDir, "incremental.gradle"))
+func createIncrementalGradleFile(baseDir, incrementalGradleFileName string) error {
+	incrementalFile, err := os.Create(path.Join(baseDir, incrementalGradleFileName))
 	if err != nil {
 		return err
 	}
@@ -163,7 +168,7 @@ func createIncrementalGradleFile(baseDir string) error {
 
 task incremental {
     doLast {
-        new File("incremental.csv").withWriter { writer ->
+        new File(output).withWriter { writer ->
             subprojects.forEach { currentProject ->
                 def dependants = subprojects.findAll { subproject ->
                     def implementationDependencies = subproject.configurations.getByName("implementation").dependencies
@@ -184,23 +189,20 @@ task incremental {
 	return nil
 }
 
-func runGradleIncrementalTask(baseDir string) error {
-	defer func() {
-		_ = os.Remove(path.Join(baseDir, "incremental.gradle"))
-	}()
+func runGradleIncrementalTask(baseDir, csvFileFileName string) error {
 	var gradleExecutable string
 	if runtime.GOOS == "windows" {
 		gradleExecutable = "gradlew.bat"
 	} else {
 		gradleExecutable = "gradlew"
 	}
-	cmd := exec.Command(path.Join(baseDir, gradleExecutable), "incremental")
+	cmd := exec.Command(path.Join(baseDir, gradleExecutable), "incremental", "-Poutput="+csvFileFileName)
 	cmd.Dir = baseDir
 	return cmd.Run()
 }
 
-func readGradleProjectsFromCsv(baseDir string) ([]gradleProject, error) {
-	incrementalCsv, err := os.Open(path.Join(baseDir, "incremental.csv"))
+func readGradleProjectsFromCsv(baseDir string, csvFileFileName string) ([]gradleProject, error) {
+	incrementalCsv, err := os.Open(path.Join(baseDir, csvFileFileName))
 	if err != nil {
 		return nil, err
 	}
@@ -211,7 +213,7 @@ func readGradleProjectsFromCsv(baseDir string) ([]gradleProject, error) {
 	}
 	var gradleProjects []gradleProject
 	for _, row := range records {
-		fmt.Printf("App: %s, path: %s", row[0], row[1])
+		fmt.Printf("\nApp: %s, path: %s, dependants: %s", row[0], row[1], row[2])
 		gradleProjects = append(gradleProjects, gradleProject{
 			name:       row[0],
 			path:       row[1],
@@ -220,7 +222,7 @@ func readGradleProjectsFromCsv(baseDir string) ([]gradleProject, error) {
 	}
 	_ = incrementalCsv.Close()
 	defer func() {
-		_ = os.Remove(path.Join(baseDir, "incremental.csv"))
+		_ = os.Remove(path.Join(baseDir, csvFileFileName))
 	}()
 	return gradleProjects, nil
 }
